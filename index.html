@@ -125,7 +125,7 @@ function LoadSample(ctx, url) {
 	req.responseType = "arraybuffer";
 	req.onload = function () {
 		if(req.response) {
-			ctx.decodeAudioData(req.response,function(b){buffer=b;},function(){});
+			ctx.decodeAudioData(req.response,function(b){buffer=b; document.getElementById("message").innerHTML="Status : Ready";},function(){});
 		}
 		else
 			buffer = ctx.createBuffer(VBArray(req.responseBody).toArray(), false);
@@ -302,6 +302,8 @@ window.addEventListener("load",Init);
 <div class="param" style="top:200px"><span class="item">Output Point : </span><input id="outx" oninput="Setup()" type="range" value="0.7" min="0.01" max="0.99" step="0.01"/> <input id="outy" oninput="Setup()" type="range" value="0.8" min="0.01" max="0.99" step="0.01"/> <span id="outputvalue"></span></div>
 
 <div class="param" style="top:240px"><span class="item">Effect Mix : </span><input id="mix" oninput="Setup()" type="range" value="0.99" min="0.01" max="0.99" step="0.01"/> <span id="mixvalue"></span></div>
+
+<div id="message" class="param" style="top:300px">Status : Loading audio-file...</div>
 <canvas id="cvgl" width="0" height"0" style="width:256px;height:256px"></canvas>
 <div id="inmarker"> </div>
 <div id="outmarker"> </div>
