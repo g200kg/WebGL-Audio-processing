@@ -1,0 +1,315 @@
+<!doctype html>
+<html>
+<head>
+<style type="text/css">
+body {
+	background:#dcc;
+}
+#base {
+	position:relative;
+	background:#200;
+	background:linear-gradient(to bottom,#000 0%,#500 5%,#400 95%,#000 100%);
+	height:420px;
+	border:2px solid #000;
+	border-radius: 8px;
+}
+#cvgl {
+	position:absolute;
+	border:2px solid #000;
+	border-radius: 4px;
+	left:50px;
+	top:80px;
+}
+#inmarker {
+	position:absolute;
+	width:8px;
+	height:8px;
+	background:#0d0;
+	border-radius:4px;
+	border:1px solid #6e7;
+}
+#outmarker {
+	position:absolute;
+	width:8px;
+	height:8px;
+	background:#00d;
+	border-radius:4px;
+	border:1px solid #6e7;
+}
+.param {
+	position:absolute;
+	left:350px;
+	height:40px;
+	color:#fdd;
+}
+.item {
+	display:inline-block;
+	width:140px;
+	line-height:30px;
+	vertical-align: middle;
+}
+</style>
+</head>
+<body>
+<script type="text/javascript">
+
+var sizex=32;
+var sizey=32;
+var audioctx=null;
+var buffer=null;
+var buffersrc=null;
+var scrproc=null;
+var mixdry,mixwet;
+var inx,iny,outx,outy,mix;
+var lasttime=0;
+var dump=0.999;
+var velo=0.05;
+var uniLocation={};
+var framebuf=[];
+var framebufidx=0;
+var outdata=new Float32Array(1024*4);
+var prg_process,prg_display;
+
+var v_shader_src="\
+	attribute vec3 position;\
+	void main(void){\
+		gl_Position=vec4(position,1.0);\
+	}";
+var f_shader_process_src="\
+	precision mediump float;\
+	uniform vec2 resolution;\
+	uniform float indata;\
+	uniform float dump;\
+	uniform float velo;\
+	uniform vec2 inpoint;\
+	uniform vec2 outpoint;\
+	uniform sampler2D texprev;\
+	void main(void){\
+		vec2 pos=gl_FragCoord.xy/resolution;\
+		vec2 iinpoint=vec2(floor(inpoint*resolution));\
+		vec4 pix=texture2D(texprev,pos);\
+		vec4 pix1=texture2D(texprev,vec2((gl_FragCoord.x-1.0)/resolution.x,pos.y));\
+		vec4 pix2=texture2D(texprev,vec2((gl_FragCoord.x+1.0)/resolution.x,pos.y));\
+		vec4 pix3=texture2D(texprev,vec2(pos.x,(gl_FragCoord.y-1.0)/resolution.y));\
+		vec4 pix4=texture2D(texprev,vec2(pos.x,(gl_FragCoord.y+1.0)/resolution.y));\
+		pix.y=(pix.y+(pix1.x+pix2.x+pix3.x+pix4.x-pix.x*4.0)*velo)*dump;\
+		pix.x+=pix.y;\
+		if(gl_FragCoord.x<1.0||gl_FragCoord.y<1.0\
+				||gl_FragCoord.x>=resolution.x-1.0||gl_FragCoord.y>=resolution.y-1.0) {\
+			pix.x=0.0;\
+		}\
+		pix.z=pix2.z;\
+		if(gl_FragCoord.x>=31.0) {\
+			if(gl_FragCoord.y>=31.0)\
+				pix.z=texture2D(texprev,outpoint).x;\
+			else\
+				pix.z=texture2D(texprev,vec2(0.0,(gl_FragCoord.y+1.0)/resolution.y)).z;\
+		}\
+		if(floor(gl_FragCoord.x)==iinpoint.x&&floor(gl_FragCoord.y)==iinpoint.y)\
+			pix.x=indata;\
+		gl_FragColor=pix;\
+	}";
+var f_shader_display_src="\
+	precision mediump float;\
+	uniform vec2 resolution;\
+	uniform sampler2D texture;\
+	void main(void){\
+		vec2 pos=gl_FragCoord.xy/resolution;\
+		vec4 pix=vec4(texture2D(texture,pos));\
+		gl_FragColor=vec4(pix.x*10.0+0.5,0.0,0.0,1.0);\
+	}";
+
+function LoadSample(ctx, url) {
+	var req = new XMLHttpRequest();
+	req.open("GET", url, true);
+	req.responseType = "arraybuffer";
+	req.onload = function () {
+		if(req.response) {
+			ctx.decodeAudioData(req.response,function(b){buffer=b;},function(){});
+		}
+		else
+			buffer = ctx.createBuffer(VBArray(req.responseBody).toArray(), false);
+	}
+	req.send();
+}
+function AudioProc(ev) {
+	var in0=ev.inputBuffer.getChannelData(0);
+	var out0=ev.outputBuffer.getChannelData(0);
+	gl.useProgram(prg_process);
+	gl.activeTexture(gl.TEXTURE0);
+	gl.bindTexture(gl.TEXTURE_2D,framebuf[0].t);
+	gl.activeTexture(gl.TEXTURE1);
+	gl.bindTexture(gl.TEXTURE_2D,framebuf[1].t);
+	gl.uniform2fv(uniLocation.resolution,[sizex,sizey]);
+	gl.uniform1f(uniLocation.dump,dump);
+	gl.uniform1f(uniLocation.velo,velo);
+	gl.uniform2fv(uniLocation.inpoint,[inx,iny]);
+	gl.uniform2fv(uniLocation.outpoint,[outx,outy]);
+	for(var i=0;i<1024;++i) {
+		gl.bindFramebuffer(gl.FRAMEBUFFER,framebuf[framebufidx].f);
+		gl.uniform1i(uniLocation.texprev,1-framebufidx);
+		gl.uniform1f(uniLocation.indata,in0[i]);
+		gl.drawArrays(gl.TRIANGLE_STRIP, 0,4);
+		framebufidx=1-framebufidx;
+	}
+	gl.flush();
+	gl.readPixels(0,sizey-32,32,32,gl.RGBA,gl.FLOAT,outdata);
+	for(var i=0,p=2;i<1024;++i,p+=4)
+		out0[i]=outdata[p];
+}
+function Stop() {
+	if(buffersrc) {
+		buffersrc.stop(0);
+	}
+	buffersrc = null;
+}
+function Play() {
+	if(buffersrc==null) {
+		buffersrc = audioctx.createBufferSource();
+		buffersrc.buffer = buffer;
+		buffersrc.loop = true;
+		buffersrc.connect(scrproc);
+		buffersrc.connect(mixdry);
+		buffersrc.start(0);
+	}
+}
+function CreateFramebuffer(w, h) {
+	var frameBuff = gl.createFramebuffer();
+	var tex = gl.createTexture();
+	gl.activeTexture(gl.TEXTURE0);
+	gl.bindFramebuffer(gl.FRAMEBUFFER, frameBuff);
+	gl.bindTexture(gl.TEXTURE_2D, tex);
+	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.FLOAT, null);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+	gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+	gl.bindTexture(gl.TEXTURE_2D, null);
+	gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+	gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+	return {"f":frameBuff, "t":tex};
+}
+
+function Init() {
+	audioctx=new AudioContext();
+	LoadSample(audioctx,"./loop.wav");
+	mixdry=audioctx.createGain();
+	mixwet=audioctx.createGain();
+	mixdry.connect(audioctx.destination);
+	mixwet.connect(audioctx.destination);
+	scrproc=audioctx.createScriptProcessor(1024,1,1);
+	scrproc.connect(mixwet);
+	scrproc.onaudioprocess=AudioProc;
+	Setup();
+	cvgl=document.getElementById("cvgl");
+	cvgl.width=sizex;
+	cvgl.height=sizey;
+	gl=cvgl.getContext("webgl");
+	var ext=gl.getExtension("OES_texture_float");
+	if(ext==null)
+		alert("float texture not supported");
+	v_shader=gl.createShader(gl.VERTEX_SHADER);
+	gl.shaderSource(v_shader, v_shader_src);
+	gl.compileShader(v_shader);
+	f_shader_process=gl.createShader(gl.FRAGMENT_SHADER);
+	gl.shaderSource(f_shader_process, f_shader_process_src);
+	gl.compileShader(f_shader_process);
+	f_shader_display=gl.createShader(gl.FRAGMENT_SHADER);
+	gl.shaderSource(f_shader_display, f_shader_display_src);
+	gl.compileShader(f_shader_display);
+	if(!gl.getShaderParameter(v_shader, gl.COMPILE_STATUS))
+		alert(gl.getShaderInfoLog(v_shader));
+	if(!gl.getShaderParameter(f_shader_process, gl.COMPILE_STATUS))
+		alert(gl.getShaderInfoLog(f_shader_process));
+	if(!gl.getShaderParameter(f_shader_display, gl.COMPILE_STATUS))
+		alert(gl.getShaderInfoLog(f_shader_display));
+	prg_process = gl.createProgram();
+	prg_display = gl.createProgram();
+	gl.attachShader(prg_process, this.v_shader);
+	gl.attachShader(prg_process, this.f_shader_process);
+	gl.linkProgram(prg_process);
+	gl.attachShader(prg_display, this.v_shader);
+	gl.attachShader(prg_display, this.f_shader_display);
+	gl.linkProgram(prg_display);
+	framebuf[0]=CreateFramebuffer(sizex,sizey);
+	framebuf[1]=CreateFramebuffer(sizex,sizey);
+
+	var vPosition=gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER,vPosition);
+	gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,1,0, 1,1,0, -1,-1,0, 1,-1,0]),gl.STATIC_DRAW);
+	var vAttLocation = gl.getAttribLocation(prg_process, "position");
+	gl.enableVertexAttribArray(vAttLocation);
+	gl.vertexAttribPointer(vAttLocation, 3, gl.FLOAT, false, 0, 0);
+	uniLocation.resolution = gl.getUniformLocation(prg_process,"resolution");
+	uniLocation.indata = gl.getUniformLocation(prg_process,"indata");
+	uniLocation.dump = gl.getUniformLocation(prg_process,"dump");
+	uniLocation.velo = gl.getUniformLocation(prg_process,"velo");
+	uniLocation.texprev = gl.getUniformLocation(prg_process,"texprev");
+	uniLocation.inpoint = gl.getUniformLocation(prg_process,"inpoint");
+	uniLocation.outpoint = gl.getUniformLocation(prg_process,"outpoint");
+	uniLocation.resolution2 = gl.getUniformLocation(prg_display,"resolution");
+	requestAnimationFrame(DispAnimation);
+}
+function DispAnimation(timestamp) {
+	if(lasttime==0)
+		lasttime=timestamp;
+	if(timestamp-lasttime<50) {
+		requestAnimationFrame(DispAnimation);
+		return;
+	}
+	lasttime=timestamp;
+	gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+	gl.useProgram(prg_display);
+	gl.uniform2fv(uniLocation.resolution2,[sizex,sizey]);
+	gl.bindTexture(gl.TEXTURE_2D, framebuf[0].t);
+	gl.drawArrays(gl.TRIANGLE_STRIP, 0,4);
+	requestAnimationFrame(DispAnimation);
+}
+function Setup() {
+	dump=1.0-1/(10*Math.pow(100,parseFloat(document.getElementById("dump").value)));
+	document.getElementById("dumpvalue").innerHTML=(dump+"000").substr(0,5);
+	velo=parseFloat(document.getElementById("velo").value);
+	document.getElementById("velovalue").innerHTML=(velo+"000").substr(0,5);
+	inx=parseFloat(document.getElementById("inx").value);
+	iny=parseFloat(document.getElementById("iny").value);
+	document.getElementById("inputvalue").innerHTML=(inx+"000").substr(0,4)+" , "+(iny+"000").substr(0,4);
+	outx=parseFloat(document.getElementById("outx").value);
+	outy=parseFloat(document.getElementById("outy").value);
+	document.getElementById("outputvalue").innerHTML=(outx+"000").substr(0,4)+" , "+(outy+"000").substr(0,4);
+	var inmarker=document.getElementById("inmarker").style;
+	inmarker.left=(inx*256+50)+"px";
+	inmarker.top=((1-iny)*256+80)+"px";
+	var outmarker=document.getElementById("outmarker").style;
+	outmarker.left=(outx*256+50)+"px";
+	outmarker.top=((1-outy)*256+80)+"px";
+	mix=parseFloat(document.getElementById("mix").value);
+	document.getElementById("mixvalue").innerHTML=(mix+"000").substr(0,4);
+	mixwet.gain.value=mix;
+	mixdry.gain.value=1-mix;
+}
+window.addEventListener("load",Init);
+
+</script>
+<h1>WebGL Audio Processing Test</h1>
+<div id="base">
+<div class="param" style="top:40px"><span class="item">Music Source : </span><button onclick="Play()">Play</button> <button onclick="Stop()">Stop</button></div>
+
+<div class="param" style="top:80px"><span class="item">Dumping Factor : </span><input id="dump" oninput="Setup()" type="range" value="0.75" min="0" max="1" step="0.001"/> <span id="dumpvalue"></span></div>
+
+<div class="param" style="top:120px"><span class="item">Propagation Speed : </span><input id="velo" oninput="Setup()" type="range" value="0.1" min="0.01" max="0.5" step="0.01"/> <span id="velovalue"></span></div>
+
+<div class="param" style="top:160px"><span class="item">Input Point : </span><input id="inx" oninput="Setup()" type="range" value="0.3" min="0.01" max="0.99" step="0.01"/> </span><input id="iny" oninput="Setup()" type="range" value="0.4" min="0.01" max="0.99" step="0.01"/> <span id="inputvalue"></span></div>
+
+<div class="param" style="top:200px"><span class="item">Output Point : </span><input id="outx" oninput="Setup()" type="range" value="0.7" min="0.01" max="0.99" step="0.01"/> <input id="outy" oninput="Setup()" type="range" value="0.8" min="0.01" max="0.99" step="0.01"/> <span id="outputvalue"></span></div>
+
+<div class="param" style="top:240px"><span class="item">Effect Mix : </span><input id="mix" oninput="Setup()" type="range" value="0.99" min="0.01" max="0.99" step="0.01"/> <span id="mixvalue"></span></div>
+<canvas id="cvgl" width="0" height"0" style="width:256px;height:256px"></canvas>
+<div id="inmarker"> </div>
+<div id="outmarker"> </div>
+</div>
+<p>This is a kind of physical simulation of a plate reverb.</p>
+<p>Wave propagation on a plate is simulated using WebGL shader program.<br/>
+Audio signals from input-point (green) will propagate to output-point (blue).
+</p>
+<b><p>CAUTION: Need Chrome and Fair GPU Performance to Execute</p></b>
+</body>
+</html>
