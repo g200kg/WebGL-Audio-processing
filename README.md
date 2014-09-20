@@ -18,3 +18,5 @@ Audio signals from input-point (green) will propagate to output-point (blue).
   Need Chrome and Fair GPU Performance to Execute.
   Otherwise, the browser may be hunged.
 
+### License
+  MIT License
