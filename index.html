@@ -164,7 +164,7 @@ function Stop() {
 	buffersrc = null;
 }
 function Play() {
-	if(buffersrc==null) {
+	if(buffer && buffersrc==null) {
 		buffersrc = audioctx.createBufferSource();
 		buffersrc.buffer = buffer;
 		buffersrc.loop = true;
