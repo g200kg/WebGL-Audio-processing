@@ -64,6 +64,7 @@ var inx,iny,outx,outy,mix;
 var lasttime=0;
 var dump=0.999;
 var velo=0.05;
+var samplerate=1;
 var uniLocation={};
 var framebuf=[];
 var framebufidx=0;
@@ -145,17 +146,41 @@ function AudioProc(ev) {
 	gl.uniform1f(uniLocation.velo,velo);
 	gl.uniform2fv(uniLocation.inpoint,[inx,iny]);
 	gl.uniform2fv(uniLocation.outpoint,[outx,outy]);
-	for(var i=0;i<1024;++i) {
-		gl.bindFramebuffer(gl.FRAMEBUFFER,framebuf[framebufidx].f);
-		gl.uniform1i(uniLocation.texprev,1-framebufidx);
-		gl.uniform1f(uniLocation.indata,in0[i]);
-		gl.drawArrays(gl.TRIANGLE_STRIP, 0,4);
-		framebufidx=1-framebufidx;
+
+	switch(samplerate) {
+	case 1:
+		for(var i=0;i<1024;++i) {
+			gl.bindFramebuffer(gl.FRAMEBUFFER,framebuf[framebufidx].f);
+			gl.uniform1i(uniLocation.texprev,1-framebufidx);
+			gl.uniform1f(uniLocation.indata,in0[i]);
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0,4);
+			framebufidx=1-framebufidx;
+		}
+		break;
+	case 2:
+		for(var i=0;i<1024;i+=2) {
+			gl.bindFramebuffer(gl.FRAMEBUFFER,framebuf[framebufidx].f);
+			gl.uniform1i(uniLocation.texprev,1-framebufidx);
+			gl.uniform1f(uniLocation.indata,(in0[i]+in0[i+1])*0.5);
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0,4);
+			framebufidx=1-framebufidx;
+		}
+		break;
+	case 4:
+		for(var i=0;i<1024;i+=4) {
+			gl.bindFramebuffer(gl.FRAMEBUFFER,framebuf[framebufidx].f);
+			gl.uniform1i(uniLocation.texprev,1-framebufidx);
+			gl.uniform1f(uniLocation.indata,(in0[i]+in0[i+1]+in0[i+2]+in0[i+3])*0.25);
+			gl.drawArrays(gl.TRIANGLE_STRIP, 0,4);
+			framebufidx=1-framebufidx;
+		}
+		break;
 	}
 	gl.flush();
-	gl.readPixels(0,sizey-32,32,32,gl.RGBA,gl.FLOAT,outdata);
-	for(var i=0,p=2;i<1024;++i,p+=4)
-		out0[i]=outdata[p];
+	gl.readPixels(0,sizey-32/samplerate,32,32/samplerate,gl.RGBA,gl.FLOAT,outdata);
+	for(var i=0,p=2;i<1024;i+=samplerate,p+=4)
+		for(var j=0;j<samplerate;++j)
+			out0[i+j]=outdata[p];
 }
 function Stop() {
 	if(buffersrc) {
@@ -265,6 +290,8 @@ function DispAnimation(timestamp) {
 	requestAnimationFrame(DispAnimation);
 }
 function Setup() {
+	samplerate=1<<(document.getElementById("samplerate").selectedIndex);
+	document.getElementById("sampleratevalue").innerHTML=audioctx.sampleRate/samplerate+"Hz";
 	dump=1.0-1/(10*Math.pow(100,parseFloat(document.getElementById("dump").value)));
 	document.getElementById("dumpvalue").innerHTML=(dump+"000").substr(0,5);
 	velo=parseFloat(document.getElementById("velo").value);
@@ -293,17 +320,19 @@ window.addEventListener("load",Init);
 <div id="base">
 <div class="param" style="top:40px"><span class="item">Music Source : </span><button onclick="Play()">Play</button> <button onclick="Stop()">Stop</button></div>
 
-<div class="param" style="top:80px"><span class="item">Dumping Factor : </span><input id="dump" oninput="Setup()" type="range" value="0.75" min="0" max="1" step="0.001"/> <span id="dumpvalue"></span></div>
+<div class="param" style="top:80px"><span class="item">Processing Rate : </span><select id="samplerate" onchange="Setup()"><option>1/1</option><option selected>1/2</option><option>1/4</option></select> <span id="sampleratevalue"></span></div>
 
-<div class="param" style="top:120px"><span class="item">Propagation Speed : </span><input id="velo" oninput="Setup()" type="range" value="0.1" min="0.01" max="0.5" step="0.01"/> <span id="velovalue"></span></div>
+<div class="param" style="top:120px"><span class="item">Dumping Factor : </span><input id="dump" oninput="Setup()" type="range" value="0.75" min="0" max="1" step="0.001"/> <span id="dumpvalue"></span></div>
 
-<div class="param" style="top:160px"><span class="item">Input Point : </span><input id="inx" oninput="Setup()" type="range" value="0.3" min="0.01" max="0.99" step="0.01"/> </span><input id="iny" oninput="Setup()" type="range" value="0.4" min="0.01" max="0.99" step="0.01"/> <span id="inputvalue"></span></div>
+<div class="param" style="top:160px"><span class="item">Propagation Speed : </span><input id="velo" oninput="Setup()" type="range" value="0.1" min="0.01" max="0.5" step="0.01"/> <span id="velovalue"></span></div>
 
-<div class="param" style="top:200px"><span class="item">Output Point : </span><input id="outx" oninput="Setup()" type="range" value="0.7" min="0.01" max="0.99" step="0.01"/> <input id="outy" oninput="Setup()" type="range" value="0.8" min="0.01" max="0.99" step="0.01"/> <span id="outputvalue"></span></div>
+<div class="param" style="top:200px"><span class="item">Input Point : </span><input id="inx" oninput="Setup()" type="range" value="0.3" min="0.01" max="0.99" step="0.01"/> </span><input id="iny" oninput="Setup()" type="range" value="0.4" min="0.01" max="0.99" step="0.01"/> <span id="inputvalue"></span></div>
 
-<div class="param" style="top:240px"><span class="item">Effect Mix : </span><input id="mix" oninput="Setup()" type="range" value="0.99" min="0.01" max="0.99" step="0.01"/> <span id="mixvalue"></span></div>
+<div class="param" style="top:240px"><span class="item">Output Point : </span><input id="outx" oninput="Setup()" type="range" value="0.7" min="0.01" max="0.99" step="0.01"/> <input id="outy" oninput="Setup()" type="range" value="0.8" min="0.01" max="0.99" step="0.01"/> <span id="outputvalue"></span></div>
 
-<div id="message" class="param" style="top:300px">Status : Loading audio-file...</div>
+<div class="param" style="top:280px"><span class="item">Effect Mix : </span><input id="mix" oninput="Setup()" type="range" value="0.99" min="0.01" max="0.99" step="0.01"/> <span id="mixvalue"></span></div>
+
+<div id="message" class="param" style="top:340px">Status : Loading audio-file...</div>
 <canvas id="cvgl" width="0" height"0" style="width:256px;height:256px"></canvas>
 <div id="inmarker"> </div>
 <div id="outmarker"> </div>
